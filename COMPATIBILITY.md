@@ -8,9 +8,7 @@
 
 ## Contracts
 
-| Contract | Capability | Status |
-|----------|-----------|--------|
-| —        | —         | Planned |
+None defined — this module provides its own gRPC API (`RootFolderService`) under capability `media.roots`.
 
 ## Breaking Changes
 
