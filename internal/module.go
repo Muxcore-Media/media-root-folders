@@ -88,11 +88,11 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:             m.id,
 		Name:           "Root Folders",
-		Version:      "0.1.5",
+		Version:      "0.1.6",
 		Roles:          []string{"library-config"},
 		Description:    "Managed library root-folder catalog for movies and TV path binding",
 		Author:         "MuxCore",
-		Capabilities:   []string{"media.roots"},
+		Capabilities:   []string{"media.roots", "settings"},
 		MinCoreVersion: "0.4.0",
 		HTTPAddr:       m.grpcAddr,
 	}
