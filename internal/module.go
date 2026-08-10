@@ -73,7 +73,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:             m.id,
 		Name:           "Root Folders",
-		Version:        "0.1.3",
+		Version:      "0.1.4",
 		Roles:          []string{"library-config"},
 		Description:    "Managed library root-folder catalog for movies and TV path binding",
 		Author:         "MuxCore",
