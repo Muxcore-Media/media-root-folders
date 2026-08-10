@@ -1,5 +1,11 @@
 # Changelog
 
+
+## [0.1.3] — 2026-08-10
+
+### Fixed
+- Module `Info().Version` aligned to **0.1.3** (was 0.1.0).
+
 ## v0.1.1 (2026-08-09)
 
 - MVP host integration: library root-folder catalog for movies/TV path binding
