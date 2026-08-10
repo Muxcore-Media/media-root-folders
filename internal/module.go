@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	rootsv1 "github.com/Muxcore-Media/media-root-folders/proto/rootsv1"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 	_ "modernc.org/sqlite"
 )
 
@@ -30,20 +32,23 @@ const (
 type Module struct {
 	rootsv1.UnimplementedRootFolderServiceServer
 
-	mu sync.RWMutex
-	db *sql.DB
+	mu    sync.RWMutex
+	cfgMu sync.RWMutex
+	db    *sql.DB
 
-	id       string
-	dbPath   string
-	grpcAddr string
-	grpcSrv  *grpc.Server
-	grpcLis  net.Listener
+	id                string
+	dbPath            string
+	grpcAddr          string
+	requireAccessible bool
+	grpcSrv           *grpc.Server
+	grpcLis           net.Listener
 }
 
 type Config struct {
-	ID       string
-	DBPath   string
-	GRPCAddr string
+	ID                string
+	DBPath            string
+	GRPCAddr          string
+	RequireAccessible *bool
 }
 
 func NewModule(cfg Config) *Module {
@@ -62,10 +67,20 @@ func NewModule(cfg Config) *Module {
 	if v := os.Getenv("ROOTS_GRPC_ADDR"); v != "" {
 		cfg.GRPCAddr = v
 	}
+	require := true
+	if cfg.RequireAccessible != nil {
+		require = *cfg.RequireAccessible
+	}
+	if v := os.Getenv("ROOTS_REQUIRE_ACCESSIBLE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			require = b
+		}
+	}
 	return &Module{
-		id:       cfg.ID,
-		dbPath:   cfg.DBPath,
-		grpcAddr: cfg.GRPCAddr,
+		id:                cfg.ID,
+		dbPath:            cfg.DBPath,
+		grpcAddr:          cfg.GRPCAddr,
+		requireAccessible: require,
 	}
 }
 
@@ -73,7 +88,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:             m.id,
 		Name:           "Root Folders",
-		Version:      "0.1.4",
+		Version:      "0.1.5",
 		Roles:          []string{"library-config"},
 		Description:    "Managed library root-folder catalog for movies and TV path binding",
 		Author:         "MuxCore",
@@ -137,6 +152,7 @@ func (m *Module) Init(ctx context.Context) error {
 func (m *Module) Start(ctx context.Context) error {
 	m.grpcSrv = grpc.NewServer()
 	rootsv1.RegisterRootFolderServiceServer(m.grpcSrv, m)
+	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 
 	go func() {
 		slog.Info("media-root-folders gRPC started", "addr", m.grpcAddr)
@@ -265,8 +281,10 @@ func (m *Module) CreateRoot(ctx context.Context, req *rootsv1.CreateRootRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireAccessibleDir(path); err != nil {
-		return nil, err
+	if m.getRequireAccessible() {
+		if err := requireAccessibleDir(path); err != nil {
+			return nil, err
+		}
 	}
 	kind, err := normalizeMediaKind(req.GetMediaKind())
 	if err != nil {
@@ -300,8 +318,10 @@ func (m *Module) UpdateRoot(ctx context.Context, req *rootsv1.UpdateRootRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireAccessibleDir(path); err != nil {
-		return nil, err
+	if m.getRequireAccessible() {
+		if err := requireAccessibleDir(path); err != nil {
+			return nil, err
+		}
 	}
 	kind, err := normalizeMediaKind(req.GetMediaKind())
 	if err != nil {

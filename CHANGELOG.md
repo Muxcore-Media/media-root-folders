@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [0.1.5] — 2026-08-10
+
+### Added
+- SettingsProvider mesh (`RegisterSettings`) for `require_accessible` create/update validation.
+
+### Changed
+- Pin `core/sdk/go/module` to **v0.5.2**.
+
+
 ## [0.1.4] — 2026-08-10
 
 ### Fixed
