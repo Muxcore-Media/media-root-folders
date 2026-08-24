@@ -29,7 +29,7 @@ const (
 	mediaKindTV     = "tv"
 )
 
-type Module struct {
+type Module struct { //nolint:govet // fieldalignment: lifecycle fields grouped for readability
 	rootsv1.UnimplementedRootFolderServiceServer
 
 	mu    sync.RWMutex
@@ -44,7 +44,7 @@ type Module struct {
 	grpcLis           net.Listener
 }
 
-type Config struct {
+type Config struct { //nolint:govet // fieldalignment: config fields grouped for readability
 	ID                string
 	DBPath            string
 	GRPCAddr          string
@@ -88,7 +88,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:             m.id,
 		Name:           "Root Folders",
-		Version:      "0.1.6",
+		Version:        "0.1.6",
 		Roles:          []string{"library-config"},
 		Description:    "Managed library root-folder catalog for movies and TV path binding",
 		Author:         "MuxCore",
@@ -100,7 +100,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 
 func (m *Module) Init(ctx context.Context) error {
 	dir := filepath.Dir(m.dbPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create db directory: %w", err)
 	}
 
@@ -110,11 +110,11 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.ExecContext(ctx, `PRAGMA journal_mode=WAL`); err != nil {
-		db.Close()
+	if _, err = db.ExecContext(ctx, `PRAGMA journal_mode=WAL`); err != nil {
+		_ = db.Close()
 		return fmt.Errorf("enable WAL: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `
+	if _, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS root_folders (
 			id         TEXT PRIMARY KEY,
 			path       TEXT NOT NULL UNIQUE,
@@ -124,12 +124,12 @@ func (m *Module) Init(ctx context.Context) error {
 			updated_at TEXT NOT NULL
 		)
 	`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("create root_folders table: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE root_folders ADD COLUMN naming_template_id TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err = db.ExecContext(ctx, `ALTER TABLE root_folders ADD COLUMN naming_template_id TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column") {
-			db.Close()
+			_ = db.Close()
 			return fmt.Errorf("migrate naming_template_id: %w", err)
 		}
 	}
@@ -138,9 +138,10 @@ func (m *Module) Init(ctx context.Context) error {
 	m.db = db
 	m.mu.Unlock()
 
-	lis, err := net.Listen("tcp", m.grpcAddr)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", m.grpcAddr)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return fmt.Errorf("listen gRPC %s: %w", m.grpcAddr, err)
 	}
 	m.grpcLis = lis
@@ -169,7 +170,7 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	if m.db != nil {
-		m.db.Close()
+		_ = m.db.Close()
 		m.db = nil
 	}
 	m.mu.Unlock()
@@ -231,7 +232,7 @@ func requireAccessibleDir(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("path is not a directory")
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path validated as absolute and operator-controlled root folder
 	if err != nil {
 		return fmt.Errorf("path not readable: %w", err)
 	}
@@ -251,7 +252,7 @@ func probePath(path string) (accessible bool, freeBytes, totalBytes int64, errMs
 		return true, 0, 0, ""
 	}
 	bsize := uint64(stat.Bsize)
-	return true, int64(stat.Bavail * bsize), int64(stat.Blocks * bsize), ""
+	return true, int64(stat.Bavail * bsize), int64(stat.Blocks * bsize), "" //nolint:gosec // disk stats fit int64 for homelab volumes
 }
 
 func enrichRoot(r *rootsv1.RootFolder) {
@@ -269,7 +270,7 @@ func (m *Module) ListRoots(ctx context.Context, req *rootsv1.ListRootsRequest) (
 	defer m.mu.RUnlock()
 
 	kind := strings.ToLower(strings.TrimSpace(req.GetMediaKind()))
-	roots := m.loadRootsLocked(kind)
+	roots := m.loadRootsLocked(ctx, kind)
 	for _, r := range roots {
 		enrichRoot(r)
 	}
@@ -282,8 +283,8 @@ func (m *Module) CreateRoot(ctx context.Context, req *rootsv1.CreateRootRequest)
 		return nil, err
 	}
 	if m.getRequireAccessible() {
-		if err := requireAccessibleDir(path); err != nil {
-			return nil, err
+		if dirErr := requireAccessibleDir(path); dirErr != nil {
+			return nil, dirErr
 		}
 	}
 	kind, err := normalizeMediaKind(req.GetMediaKind())
@@ -305,7 +306,7 @@ func (m *Module) CreateRoot(ctx context.Context, req *rootsv1.CreateRootRequest)
 	if err != nil {
 		return nil, fmt.Errorf("create root: %w", err)
 	}
-	root := m.loadRootLocked(id)
+	root := m.loadRootLocked(ctx, id)
 	enrichRoot(root)
 	return &rootsv1.CreateRootResponse{Root: root}, nil
 }
@@ -319,8 +320,8 @@ func (m *Module) UpdateRoot(ctx context.Context, req *rootsv1.UpdateRootRequest)
 		return nil, err
 	}
 	if m.getRequireAccessible() {
-		if err := requireAccessibleDir(path); err != nil {
-			return nil, err
+		if dirErr := requireAccessibleDir(path); dirErr != nil {
+			return nil, dirErr
 		}
 	}
 	kind, err := normalizeMediaKind(req.GetMediaKind())
@@ -345,7 +346,7 @@ func (m *Module) UpdateRoot(ctx context.Context, req *rootsv1.UpdateRootRequest)
 	if n == 0 {
 		return nil, fmt.Errorf("root not found: %s", req.GetId())
 	}
-	root := m.loadRootLocked(req.GetId())
+	root := m.loadRootLocked(ctx, req.GetId())
 	enrichRoot(root)
 	return &rootsv1.UpdateRootResponse{Root: root}, nil
 }
@@ -372,7 +373,7 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 		if err != nil {
 			return nil, err
 		}
-		if found := m.loadRootByPathLocked(path); found != nil {
+		if found := m.loadRootByPathLocked(ctx, path); found != nil {
 			enrichRoot(found)
 			existing = append(existing, found)
 			continue
@@ -387,7 +388,7 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 		if err != nil {
 			return nil, fmt.Errorf("seed path %s: %w", path, err)
 		}
-		root := m.loadRootLocked(id)
+		root := m.loadRootLocked(ctx, id)
 		enrichRoot(root)
 		created = append(created, root)
 	}
@@ -418,8 +419,8 @@ func (m *Module) BrowsePath(ctx context.Context, req *rootsv1.BrowsePathRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireAccessibleDir(path); err != nil {
-		return nil, err
+	if dirErr := requireAccessibleDir(path); dirErr != nil {
+		return nil, dirErr
 	}
 
 	entries, err := os.ReadDir(path)
@@ -455,13 +456,13 @@ func (m *Module) BrowsePath(ctx context.Context, req *rootsv1.BrowsePathRequest)
 	}, nil
 }
 
-func (m *Module) loadRootsLocked(mediaKind string) []*rootsv1.RootFolder {
+func (m *Module) loadRootsLocked(ctx context.Context, mediaKind string) []*rootsv1.RootFolder {
 	var rows *sql.Rows
 	var err error
 	if mediaKind == "" {
-		rows, err = m.db.Query(`SELECT id, path, name, media_kind, COALESCE(naming_template_id, ''), created_at, updated_at FROM root_folders ORDER BY path`)
+		rows, err = m.db.QueryContext(ctx, `SELECT id, path, name, media_kind, COALESCE(naming_template_id, ''), created_at, updated_at FROM root_folders ORDER BY path`)
 	} else {
-		rows, err = m.db.Query(
+		rows, err = m.db.QueryContext(ctx,
 			`SELECT id, path, name, media_kind, COALESCE(naming_template_id, ''), created_at, updated_at FROM root_folders
 			 WHERE media_kind = ? OR media_kind = 'any' ORDER BY path`,
 			mediaKind,
@@ -470,7 +471,7 @@ func (m *Module) loadRootsLocked(mediaKind string) []*rootsv1.RootFolder {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []*rootsv1.RootFolder
 	for rows.Next() {
@@ -483,9 +484,9 @@ func (m *Module) loadRootsLocked(mediaKind string) []*rootsv1.RootFolder {
 	return out
 }
 
-func (m *Module) loadRootLocked(id string) *rootsv1.RootFolder {
+func (m *Module) loadRootLocked(ctx context.Context, id string) *rootsv1.RootFolder {
 	var r rootsv1.RootFolder
-	err := m.db.QueryRow(
+	err := m.db.QueryRowContext(ctx,
 		`SELECT id, path, name, media_kind, COALESCE(naming_template_id, ''), created_at, updated_at FROM root_folders WHERE id = ?`, id,
 	).Scan(&r.Id, &r.Path, &r.Name, &r.MediaKind, &r.NamingTemplateId, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
@@ -494,9 +495,9 @@ func (m *Module) loadRootLocked(id string) *rootsv1.RootFolder {
 	return &r
 }
 
-func (m *Module) loadRootByPathLocked(path string) *rootsv1.RootFolder {
+func (m *Module) loadRootByPathLocked(ctx context.Context, path string) *rootsv1.RootFolder {
 	var r rootsv1.RootFolder
-	err := m.db.QueryRow(
+	err := m.db.QueryRowContext(ctx,
 		`SELECT id, path, name, media_kind, COALESCE(naming_template_id, ''), created_at, updated_at FROM root_folders WHERE path = ?`, path,
 	).Scan(&r.Id, &r.Path, &r.Name, &r.MediaKind, &r.NamingTemplateId, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
