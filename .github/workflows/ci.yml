@@ -52,7 +52,7 @@ jobs:
           go vet ./...
 
   docker:
-    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    if: false # no Dockerfile; origin CI is Forgejo, not GHCR (Appendix E)
     runs-on: self-hosted
     needs: [lint, test, build]
     steps:

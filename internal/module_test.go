@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	rootsv1 "github.com/Muxcore-Media/media-root-folders/proto/rootsv1"
 )
 
@@ -31,6 +34,17 @@ func mustTempDir(t *testing.T, parent, name string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func expectCode(t *testing.T, err error, code codes.Code) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error code %v", code)
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != code {
+		t.Fatalf("error %v: want code %v", err, code)
+	}
 }
 
 func TestModuleInfo(t *testing.T) {
@@ -108,6 +122,70 @@ func TestCreateListUpdateDelete(t *testing.T) {
 	}
 }
 
+func TestGetRoot(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	dir := mustTempDir(t, t.TempDir(), "lib")
+
+	created, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.GetRoot(ctx, &rootsv1.GetRootRequest{Id: created.Root.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root.Id != created.Root.Id {
+		t.Errorf("id: %q", got.Root.Id)
+	}
+
+	_, err = m.GetRoot(ctx, &rootsv1.GetRootRequest{Id: "missing"})
+	expectCode(t, err, codes.NotFound)
+
+	_, err = m.GetRoot(ctx, &rootsv1.GetRootRequest{})
+	expectCode(t, err, codes.InvalidArgument)
+}
+
+func TestUpdateRootMerge(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	dir := mustTempDir(t, base, "Movies")
+
+	created, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{
+		Path:             dir,
+		Name:             "Movies",
+		MediaKind:        "movies",
+		NamingTemplateId: "tpl_a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byName, err := m.UpdateRoot(ctx, &rootsv1.UpdateRootRequest{
+		Id:   created.Root.Id,
+		Name: "Feature Films",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byName.Root.Path != dir || byName.Root.Name != "Feature Films" || byName.Root.NamingTemplateId != "tpl_a" {
+		t.Errorf("name-only merge: %+v", byName.Root)
+	}
+
+	byTemplate, err := m.UpdateRoot(ctx, &rootsv1.UpdateRootRequest{
+		Id:               created.Root.Id,
+		NamingTemplateId: "tpl_b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byTemplate.Root.Path != dir || byTemplate.Root.Name != "Feature Films" || byTemplate.Root.NamingTemplateId != "tpl_b" {
+		t.Errorf("template-only merge: %+v", byTemplate.Root)
+	}
+}
+
 func TestRejectRelativeDuplicateAndMissing(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
@@ -166,10 +244,14 @@ func TestMediaKindFilter(t *testing.T) {
 	base := t.TempDir()
 	movies := mustTempDir(t, base, "movies")
 	tv := mustTempDir(t, base, "tv")
+	music := mustTempDir(t, base, "music")
+	books := mustTempDir(t, base, "books")
 	shared := mustTempDir(t, base, "shared")
 
 	_, _ = m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: movies, MediaKind: "movies"})
 	_, _ = m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: tv, MediaKind: "tv"})
+	_, _ = m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: music, MediaKind: "music"})
+	_, _ = m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: books, MediaKind: "books"})
 	_, _ = m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: shared, MediaKind: "any"})
 
 	list, err := m.ListRoots(ctx, &rootsv1.ListRootsRequest{MediaKind: "movies"})
@@ -179,27 +261,33 @@ func TestMediaKindFilter(t *testing.T) {
 	if len(list.Roots) != 2 {
 		t.Fatalf("movies filter: %d", len(list.Roots))
 	}
-	for _, r := range list.Roots {
-		if r.MediaKind != "movies" && r.MediaKind != "any" {
-			t.Errorf("unexpected kind in movies filter: %s", r.MediaKind)
-		}
-	}
 
-	tvList, err := m.ListRoots(ctx, &rootsv1.ListRootsRequest{MediaKind: "tv"})
+	musicList, err := m.ListRoots(ctx, &rootsv1.ListRootsRequest{MediaKind: "music"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tvList.Roots) != 2 {
-		t.Fatalf("tv filter: %d", len(tvList.Roots))
+	if len(musicList.Roots) != 2 {
+		t.Fatalf("music filter: %d", len(musicList.Roots))
+	}
+
+	booksList, err := m.ListRoots(ctx, &rootsv1.ListRootsRequest{MediaKind: "books"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(booksList.Roots) != 2 {
+		t.Fatalf("books filter: %d", len(booksList.Roots))
 	}
 }
 
 func TestSeedFromPaths(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
+	base := t.TempDir()
+	a := mustTempDir(t, base, "a")
+	b := mustTempDir(t, base, "b")
 
 	first, err := m.SeedFromPaths(ctx, &rootsv1.SeedFromPathsRequest{
-		Paths:     []string{"/data/a", "/data/b"},
+		Paths:     []string{a, b},
 		MediaKind: "movies",
 	})
 	if err != nil {
@@ -209,8 +297,9 @@ func TestSeedFromPaths(t *testing.T) {
 		t.Fatalf("first seed: created=%d existing=%d", len(first.Created), len(first.Existing))
 	}
 
+	c := mustTempDir(t, base, "c")
 	second, err := m.SeedFromPaths(ctx, &rootsv1.SeedFromPathsRequest{
-		Paths: []string{"/data/a", "/data/c"},
+		Paths: []string{a, c},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,17 +307,44 @@ func TestSeedFromPaths(t *testing.T) {
 	if len(second.Created) != 1 || len(second.Existing) != 1 {
 		t.Fatalf("second seed: created=%d existing=%d", len(second.Created), len(second.Existing))
 	}
-	if second.Existing[0].Path != "/data/a" {
+	if second.Existing[0].Path != a {
 		t.Errorf("existing path: %q", second.Existing[0].Path)
 	}
+}
+
+func TestSeedFromPathsSkipValidation(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	missing := filepath.Join(t.TempDir(), "not-created-yet")
+
+	resp, err := m.SeedFromPaths(ctx, &rootsv1.SeedFromPathsRequest{
+		Paths:           []string{missing},
+		SkipValidation:  true,
+		MediaKind:       "movies",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Created) != 1 {
+		t.Fatalf("created: %d", len(resp.Created))
+	}
+
+	_, err = m.SeedFromPaths(ctx, &rootsv1.SeedFromPathsRequest{
+		Paths: []string{missing},
+	})
+	expectCode(t, err, codes.InvalidArgument)
 }
 
 func TestInvalidMediaKind(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 	dir := mustTempDir(t, t.TempDir(), "x")
-	if _, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "books"}); err == nil {
+	if _, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "comics"}); err == nil {
 		t.Fatal("expected invalid kind")
+	}
+	_, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "books"})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -260,6 +376,7 @@ func TestBrowsePath(t *testing.T) {
 	base := t.TempDir()
 	child := mustTempDir(t, base, "child")
 	_ = mustTempDir(t, child, "nested")
+	_ = mustTempDir(t, child, ".hidden")
 	if err := os.WriteFile(filepath.Join(child, "file.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +397,82 @@ func TestBrowsePath(t *testing.T) {
 
 	if _, err := m.BrowsePath(ctx, &rootsv1.BrowsePathRequest{Path: "relative"}); err == nil {
 		t.Fatal("expected relative reject")
+	}
+}
+
+func TestBrowsePathPrefixAllowlist(t *testing.T) {
+	base := t.TempDir()
+	allowed := mustTempDir(t, base, "media")
+	outside := mustTempDir(t, base, "outside")
+
+	m := NewModule(Config{
+		DBPath:         filepath.Join(t.TempDir(), "roots.db"),
+		GRPCAddr:       ":0",
+		BrowsePrefixes: []string{allowed},
+	})
+	ctx := context.Background()
+	if err := m.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Stop(ctx) })
+
+	if _, err := m.BrowsePath(ctx, &rootsv1.BrowsePathRequest{Path: allowed}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.BrowsePath(ctx, &rootsv1.BrowsePathRequest{Path: outside})
+	expectCode(t, err, codes.InvalidArgument)
+}
+
+func TestDeleteRootErrors(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+
+	_, err := m.DeleteRoot(ctx, &rootsv1.DeleteRootRequest{})
+	expectCode(t, err, codes.InvalidArgument)
+
+	_, err = m.DeleteRoot(ctx, &rootsv1.DeleteRootRequest{Id: "rf_missing"})
+	expectCode(t, err, codes.NotFound)
+}
+
+func TestPickRootDefaultAndFallback(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	small := mustTempDir(t, base, "small")
+	large := mustTempDir(t, base, "large")
+
+	smallRoot, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: small, MediaKind: "movies"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeRoot, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: large, MediaKind: "movies"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	picked, err := m.PickRoot(ctx, &rootsv1.PickRootRequest{MediaKind: "movies"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked.Root.Id != largeRoot.Root.Id && picked.Root.Id != smallRoot.Root.Id {
+		t.Fatalf("unexpected pick: %s", picked.Root.Id)
+	}
+
+	def := true
+	_, err = m.UpdateRoot(ctx, &rootsv1.UpdateRootRequest{
+		Id:        smallRoot.Root.Id,
+		IsDefault: &def,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	picked, err = m.PickRoot(ctx, &rootsv1.PickRootRequest{MediaKind: "movies"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if picked.Root.Id != smallRoot.Root.Id {
+		t.Fatalf("default pick: got %s want %s", picked.Root.Id, smallRoot.Root.Id)
 	}
 }
 
