@@ -4,25 +4,28 @@ option go_package = "github.com/Muxcore-Media/media-root-folders/proto/rootsv1;r
 
 service RootFolderService {
   rpc ListRoots(ListRootsRequest) returns (ListRootsResponse);
+  rpc GetRoot(GetRootRequest) returns (GetRootResponse);
   rpc CreateRoot(CreateRootRequest) returns (CreateRootResponse);
   rpc UpdateRoot(UpdateRootRequest) returns (UpdateRootResponse);
   rpc DeleteRoot(DeleteRootRequest) returns (DeleteRootResponse);
   rpc SeedFromPaths(SeedFromPathsRequest) returns (SeedFromPathsResponse);
   rpc ProbeRoot(ProbeRootRequest) returns (ProbeRootResponse);
   rpc BrowsePath(BrowsePathRequest) returns (BrowsePathResponse);
+  rpc PickRoot(PickRootRequest) returns (PickRootResponse);
 }
 
 message RootFolder {
   string id = 1;
   string path = 2;
   string name = 3;
-  string media_kind = 4; // "movies" | "tv" | "any"
+  string media_kind = 4; // "movies" | "tv" | "music" | "books" | "audiobooks" | "any"
   string created_at = 5;
   string updated_at = 6;
   bool accessible = 7;
   int64 free_bytes = 8;
   int64 total_bytes = 9;
   string naming_template_id = 10;
+  bool is_default = 11;
 }
 
 message ListRootsRequest {
@@ -33,11 +36,20 @@ message ListRootsResponse {
   repeated RootFolder roots = 1;
 }
 
+message GetRootRequest {
+  string id = 1;
+}
+
+message GetRootResponse {
+  RootFolder root = 1;
+}
+
 message CreateRootRequest {
   string path = 1;
   string name = 2;
   string media_kind = 3; // default "any"
   string naming_template_id = 4;
+  optional bool is_default = 5;
 }
 
 message CreateRootResponse {
@@ -50,6 +62,7 @@ message UpdateRootRequest {
   string name = 3;
   string media_kind = 4;
   string naming_template_id = 5;
+  optional bool is_default = 6;
 }
 
 message UpdateRootResponse {
@@ -65,6 +78,7 @@ message DeleteRootResponse {}
 message SeedFromPathsRequest {
   repeated string paths = 1;
   string media_kind = 2; // applied to newly created roots; default "any"
+  bool skip_validation = 3; // skip require_accessible probe (installer pre-create)
 }
 
 message SeedFromPathsResponse {
@@ -98,4 +112,12 @@ message BrowsePathResponse {
   string path = 1;
   string parent = 2;
   repeated BrowseEntry entries = 3;
+}
+
+message PickRootRequest {
+  string media_kind = 1;
+}
+
+message PickRootResponse {
+  RootFolder root = 1;
 }
