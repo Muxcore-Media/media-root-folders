@@ -33,6 +33,7 @@ const (
 	mediaKindMusic      = "music"
 	mediaKindBooks      = "books"
 	mediaKindAudiobooks = "audiobooks"
+	mediaKindComics     = "comics"
 
 	settingKeyRequireAccessible = "require_accessible"
 )
@@ -274,10 +275,10 @@ func normalizeMediaKind(kind string) (string, error) {
 		return mediaKindAny, nil
 	}
 	switch k {
-	case mediaKindAny, mediaKindMovies, mediaKindTV, mediaKindMusic, mediaKindBooks, mediaKindAudiobooks:
+	case mediaKindAny, mediaKindMovies, mediaKindTV, mediaKindMusic, mediaKindBooks, mediaKindAudiobooks, mediaKindComics:
 		return k, nil
 	default:
-		return "", fmt.Errorf("media_kind must be movies, tv, music, books, audiobooks, or any")
+		return "", fmt.Errorf("media_kind must be movies, tv, music, books, audiobooks, comics, or any")
 	}
 }
 

@@ -18,7 +18,7 @@ message RootFolder {
   string id = 1;
   string path = 2;
   string name = 3;
-  string media_kind = 4; // "movies" | "tv" | "music" | "books" | "audiobooks" | "any"
+  string media_kind = 4; // "movies" | "tv" | "music" | "books" | "audiobooks" | "comics" | "any"
   string created_at = 5;
   string updated_at = 6;
   bool accessible = 7;

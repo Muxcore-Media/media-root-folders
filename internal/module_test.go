@@ -339,11 +339,15 @@ func TestInvalidMediaKind(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 	dir := mustTempDir(t, t.TempDir(), "x")
-	if _, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "comics"}); err == nil {
+	if _, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "podcasts"}); err == nil {
 		t.Fatal("expected invalid kind")
 	}
 	_, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: dir, MediaKind: "books"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	comics := mustTempDir(t, t.TempDir(), "comics")
+	if _, err := m.CreateRoot(ctx, &rootsv1.CreateRootRequest{Path: comics, MediaKind: "comics"}); err != nil {
 		t.Fatal(err)
 	}
 }
