@@ -318,9 +318,9 @@ func TestSeedFromPathsSkipValidation(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-created-yet")
 
 	resp, err := m.SeedFromPaths(ctx, &rootsv1.SeedFromPathsRequest{
-		Paths:           []string{missing},
-		SkipValidation:  true,
-		MediaKind:       "movies",
+		Paths:          []string{missing},
+		SkipValidation: true,
+		MediaKind:      "movies",
 	})
 	if err != nil {
 		t.Fatal(err)

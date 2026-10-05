@@ -326,6 +326,17 @@ func probePath(path string) (accessible bool, freeBytes, totalBytes int64, errMs
 	return true, int64(stat.Bavail * bsize), int64(stat.Blocks * bsize), "" //nolint:gosec // disk stats fit int64 for homelab volumes
 }
 
+// cloneRoot deep-copies a root folder. proto.Clone preserves the concrete
+// type, so the fallback below is unreachable and only satisfies the checked
+// assertion.
+func cloneRoot(r *rootsv1.RootFolder) *rootsv1.RootFolder {
+	c, ok := proto.Clone(r).(*rootsv1.RootFolder)
+	if !ok {
+		return r
+	}
+	return c
+}
+
 func enrichRoot(r *rootsv1.RootFolder) {
 	if r == nil {
 		return
@@ -687,11 +698,11 @@ func (m *Module) PickRoot(ctx context.Context, req *rootsv1.PickRootRequest) (*r
 				return &rootsv1.PickRootResponse{Root: r}, nil
 			}
 			if r.MediaKind == mediaKindAny && anyDefault == nil {
-				anyDefault = proto.Clone(r).(*rootsv1.RootFolder)
+				anyDefault = cloneRoot(r)
 			}
 		}
 		if picked == nil || r.FreeBytes > picked.FreeBytes {
-			picked = proto.Clone(r).(*rootsv1.RootFolder)
+			picked = cloneRoot(r)
 		}
 	}
 	if anyDefault != nil {
