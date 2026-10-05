@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	manifest "github.com/Muxcore-Media/media-root-folders"
 	rootsv1 "github.com/Muxcore-Media/media-root-folders/proto/rootsv1"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
@@ -127,7 +128,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:             m.id,
 		Name:           "Root Folders",
-		Version:        "0.1.6",
+		Version:        modulesdk.ManifestVersion(manifest.ManifestJSON),
 		Roles:          []string{"library-config"},
 		Description:    "Managed library root-folder catalog for movies and TV path binding",
 		Author:         "MuxCore",
