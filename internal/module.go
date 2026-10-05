@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Muxcore-Media/core/sdk/go/module/meshtls"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -211,7 +212,11 @@ func (m *Module) Init(ctx context.Context) error {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.grpcSrv = grpc.NewServer()
+	srv, err := meshtls.NewServer()
+	if err != nil {
+		return fmt.Errorf("mesh tls: %w", err)
+	}
+	m.grpcSrv = srv
 	rootsv1.RegisterRootFolderServiceServer(m.grpcSrv, m)
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 
