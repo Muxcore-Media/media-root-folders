@@ -1,7 +1,7 @@
 {
   "name": "Root Folders",
   "description": "Managed library root-folder catalog for movies and TV path binding",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "author": "MuxCore",
   "roles": [
     "library-config"

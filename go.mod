@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
-	github.com/Muxcore-Media/core/sdk/go/module v0.6.3
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.4
 	golang.org/x/sys v0.47.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
@@ -12,7 +12,7 @@ require (
 )
 
 require (
-	github.com/Muxcore-Media/core v0.6.12 // indirect
+	github.com/Muxcore-Media/core v0.6.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
