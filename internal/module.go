@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	rootsv1 "github.com/Muxcore-Media/media-root-folders/proto/rootsv1"
 
@@ -686,13 +687,11 @@ func (m *Module) PickRoot(ctx context.Context, req *rootsv1.PickRootRequest) (*r
 				return &rootsv1.PickRootResponse{Root: r}, nil
 			}
 			if r.MediaKind == mediaKindAny && anyDefault == nil {
-				clone := *r
-				anyDefault = &clone
+				anyDefault = proto.Clone(r).(*rootsv1.RootFolder)
 			}
 		}
 		if picked == nil || r.FreeBytes > picked.FreeBytes {
-			clone := *r
-			picked = &clone
+			picked = proto.Clone(r).(*rootsv1.RootFolder)
 		}
 	}
 	if anyDefault != nil {
