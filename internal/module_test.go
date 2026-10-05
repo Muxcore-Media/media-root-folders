@@ -16,8 +16,9 @@ import (
 func newTestModule(t *testing.T) *Module {
 	t.Helper()
 	m := NewModule(Config{
-		DBPath:   filepath.Join(t.TempDir(), "roots.db"),
-		GRPCAddr: ":0",
+		DBPath:          filepath.Join(t.TempDir(), "roots.db"),
+		GRPCAddr:        ":0",
+		AllowedPrefixes: []string{os.TempDir()},
 	})
 	ctx := context.Background()
 	if err := m.Init(ctx); err != nil {

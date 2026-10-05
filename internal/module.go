@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Muxcore-Media/core/sdk/go/module/meshtls"
+	"github.com/Muxcore-Media/core/sdk/go/module/pathguard"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -52,9 +53,14 @@ type Module struct { //nolint:govet // fieldalignment: lifecycle fields grouped 
 	dbPath            string
 	grpcAddr          string
 	requireAccessible bool
-	browsePrefixes    []string
-	grpcSrv           *grpc.Server
-	grpcLis           net.Listener
+	// allowedPrefixes (ROOTS_ALLOWED_PREFIXES) bound every path that can
+	// become a root or be probed; empty refuses them all (RULE-VAL-1).
+	allowedPrefixes []string
+	// browsePrefixes (ROOTS_BROWSE_PREFIXES) bound BrowsePath; empty falls
+	// back to allowedPrefixes, then to the registered roots.
+	browsePrefixes []string
+	grpcSrv        *grpc.Server
+	grpcLis        net.Listener
 }
 
 type Config struct {
@@ -62,6 +68,7 @@ type Config struct {
 	DBPath            string
 	GRPCAddr          string
 	RequireAccessible *bool
+	AllowedPrefixes   []string
 	BrowsePrefixes    []string
 }
 
@@ -90,37 +97,43 @@ func NewModule(cfg Config) *Module {
 			require = b
 		}
 	}
-	prefixes := cfg.BrowsePrefixes
-	if len(prefixes) == 0 {
-		if v := os.Getenv("ROOTS_BROWSE_PREFIXES"); v != "" {
-			prefixes = parseBrowsePrefixes(v)
-		} else {
-			prefixes = []string{"/"}
-		}
+	allowed := cleanPrefixes(cfg.AllowedPrefixes)
+	if len(allowed) == 0 {
+		allowed = parsePrefixList(os.Getenv("ROOTS_ALLOWED_PREFIXES"))
+	}
+	browse := cleanPrefixes(cfg.BrowsePrefixes)
+	if len(browse) == 0 {
+		browse = parsePrefixList(os.Getenv("ROOTS_BROWSE_PREFIXES"))
 	}
 	return &Module{
 		id:                cfg.ID,
 		dbPath:            cfg.DBPath,
 		grpcAddr:          cfg.GRPCAddr,
 		requireAccessible: require,
-		browsePrefixes:    prefixes,
+		allowedPrefixes:   allowed,
+		browsePrefixes:    browse,
 	}
 }
 
-func parseBrowsePrefixes(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+// parsePrefixList parses a comma-separated list of absolute path prefixes;
+// relative or empty entries are dropped (and logged).
+func parsePrefixList(raw string) []string {
+	return cleanPrefixes(strings.Split(raw, ","))
+}
+
+func cleanPrefixes(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, p := range in {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		if cleaned, err := normalizePath(p); err == nil {
-			out = append(out, cleaned)
+		cleaned, err := normalizePath(p)
+		if err != nil {
+			slog.Warn("media-root-folders: ignoring path prefix", "prefix", p, "error", err)
+			continue
 		}
-	}
-	if len(out) == 0 {
-		return []string{"/"}
+		out = append(out, cleaned)
 	}
 	return out
 }
@@ -207,7 +220,8 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 	m.grpcLis = lis
 
-	slog.Info("media-root-folders initialized", "db", m.dbPath, "grpc", m.grpcAddr)
+	m.warnRootsOutsideAllowList(ctx)
+	slog.Info("media-root-folders initialized", "db", m.dbPath, "grpc", m.grpcAddr, "allowed_prefixes", m.allowedPrefixes)
 	return nil
 }
 
@@ -343,9 +357,18 @@ func cloneRoot(r *rootsv1.RootFolder) *rootsv1.RootFolder {
 	return c
 }
 
-func enrichRoot(r *rootsv1.RootFolder) {
+func (m *Module) enrichRoot(r *rootsv1.RootFolder) {
 	if r == nil {
 		return
+	}
+	if len(m.allowedPrefixes) > 0 {
+		if _, err := pathguard.Confine(r.Path, m.allowedPrefixes); err != nil {
+			// A root registered before ROOTS_ALLOWED_PREFIXES (or that now
+			// resolves outside it via a symlink) is reported inaccessible so
+			// PickRoot never hands it out; it stays listed for deletion.
+			r.Accessible, r.FreeBytes, r.TotalBytes = false, 0, 0
+			return
+		}
 	}
 	ok, free, total, _ := probePath(r.Path)
 	r.Accessible = ok
@@ -353,25 +376,66 @@ func enrichRoot(r *rootsv1.RootFolder) {
 	r.TotalBytes = total
 }
 
-func pathUnderPrefix(path, prefix string) bool {
-	path = filepath.Clean(path)
-	prefix = filepath.Clean(prefix)
-	if prefix == string(filepath.Separator) {
-		return filepath.IsAbs(path)
+// confineRootPath validates a path that is about to become (or be probed as)
+// a root: absolute, no ".." segments, and resolving (symlinks included)
+// inside ROOTS_ALLOWED_PREFIXES. It returns the cleaned, unresolved path so
+// stored roots keep the operator's spelling.
+func (m *Module) confineRootPath(raw string) (string, error) {
+	path, err := normalizePath(raw)
+	if err != nil {
+		return "", invalidArg("%v", err)
 	}
-	if path == prefix {
-		return true
+	if len(m.allowedPrefixes) == 0 {
+		return "", status.Error(codes.FailedPrecondition, "root paths refused: ROOTS_ALLOWED_PREFIXES is not configured")
 	}
-	return strings.HasPrefix(path, prefix+string(filepath.Separator))
+	if _, err := pathguard.Confine(strings.TrimSpace(raw), m.allowedPrefixes); err != nil {
+		return "", invalidArg("path %q not allowed: %v", path, err)
+	}
+	return path, nil
 }
 
-func (m *Module) pathAllowedByBrowsePrefixes(path string) bool {
-	for _, prefix := range m.browsePrefixes {
-		if pathUnderPrefix(path, prefix) {
-			return true
+// browseRoots returns the directories BrowsePath may list: the explicit
+// browse prefixes, else the allowed root prefixes, else the registered roots.
+// With none of these it refuses (no whole-filesystem default).
+func (m *Module) browseRoots(ctx context.Context) ([]string, error) {
+	if len(m.browsePrefixes) > 0 {
+		return m.browsePrefixes, nil
+	}
+	if len(m.allowedPrefixes) > 0 {
+		return m.allowedPrefixes, nil
+	}
+	m.mu.RLock()
+	roots, err := m.loadRootsLocked(ctx, "")
+	m.mu.RUnlock()
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		out = append(out, r.Path)
+	}
+	if len(out) == 0 {
+		return nil, status.Error(codes.FailedPrecondition, "browse refused: set ROOTS_BROWSE_PREFIXES or ROOTS_ALLOWED_PREFIXES")
+	}
+	return out, nil
+}
+
+func (m *Module) warnRootsOutsideAllowList(ctx context.Context) {
+	if len(m.allowedPrefixes) == 0 {
+		slog.Warn("media-root-folders: ROOTS_ALLOWED_PREFIXES not set; creating, updating, seeding and probing roots is refused")
+		return
+	}
+	m.mu.RLock()
+	roots, err := m.loadRootsLocked(ctx, "")
+	m.mu.RUnlock()
+	if err != nil {
+		return
+	}
+	for _, r := range roots {
+		if _, err := pathguard.Confine(r.Path, m.allowedPrefixes); err != nil {
+			slog.Warn("media-root-folders: registered root outside ROOTS_ALLOWED_PREFIXES is reported inaccessible", "id", r.Id, "path", r.Path)
 		}
 	}
-	return false
 }
 
 func isUniqueConstraint(err error) bool {
@@ -388,7 +452,7 @@ func (m *Module) ListRoots(ctx context.Context, req *rootsv1.ListRootsRequest) (
 		return nil, internalErr(err)
 	}
 	for _, r := range roots {
-		enrichRoot(r)
+		m.enrichRoot(r)
 	}
 	return &rootsv1.ListRootsResponse{Roots: roots}, nil
 }
@@ -406,14 +470,14 @@ func (m *Module) GetRoot(ctx context.Context, req *rootsv1.GetRootRequest) (*roo
 		}
 		return nil, internalErr(err)
 	}
-	enrichRoot(root)
+	m.enrichRoot(root)
 	return &rootsv1.GetRootResponse{Root: root}, nil
 }
 
 func (m *Module) CreateRoot(ctx context.Context, req *rootsv1.CreateRootRequest) (*rootsv1.CreateRootResponse, error) {
-	path, err := normalizePath(req.GetPath())
+	path, err := m.confineRootPath(req.GetPath())
 	if err != nil {
-		return nil, invalidArg("%v", err)
+		return nil, err
 	}
 	if m.getRequireAccessible() {
 		if dirErr := requireAccessibleDir(path); dirErr != nil {
@@ -453,7 +517,7 @@ func (m *Module) CreateRoot(ctx context.Context, req *rootsv1.CreateRootRequest)
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	enrichRoot(root)
+	m.enrichRoot(root)
 	return &rootsv1.CreateRootResponse{Root: root}, nil
 }
 
@@ -475,9 +539,9 @@ func (m *Module) UpdateRoot(ctx context.Context, req *rootsv1.UpdateRootRequest)
 
 	path := existing.Path
 	if strings.TrimSpace(req.GetPath()) != "" {
-		path, err = normalizePath(req.GetPath())
+		path, err = m.confineRootPath(req.GetPath())
 		if err != nil {
-			return nil, invalidArg("%v", err)
+			return nil, err
 		}
 	}
 	if m.getRequireAccessible() && strings.TrimSpace(req.GetPath()) != "" {
@@ -533,7 +597,7 @@ func (m *Module) UpdateRoot(ctx context.Context, req *rootsv1.UpdateRootRequest)
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	enrichRoot(root)
+	m.enrichRoot(root)
 	return &rootsv1.UpdateRootResponse{Root: root}, nil
 }
 
@@ -565,9 +629,9 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 
 	var created, existing []*rootsv1.RootFolder
 	for _, raw := range req.GetPaths() {
-		path, err := normalizePath(raw)
+		path, err := m.confineRootPath(raw)
 		if err != nil {
-			return nil, invalidArg("%v", err)
+			return nil, err
 		}
 		if !req.GetSkipValidation() && m.getRequireAccessible() {
 			if dirErr := requireAccessibleDir(path); dirErr != nil {
@@ -575,7 +639,7 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 			}
 		}
 		if found := m.loadRootByPathLocked(ctx, path); found != nil {
-			enrichRoot(found)
+			m.enrichRoot(found)
 			existing = append(existing, found)
 			continue
 		}
@@ -589,7 +653,7 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 		if err != nil {
 			if isUniqueConstraint(err) {
 				if found := m.loadRootByPathLocked(ctx, path); found != nil {
-					enrichRoot(found)
+					m.enrichRoot(found)
 					existing = append(existing, found)
 					continue
 				}
@@ -600,16 +664,16 @@ func (m *Module) SeedFromPaths(ctx context.Context, req *rootsv1.SeedFromPathsRe
 		if err != nil {
 			return nil, internalErr(err)
 		}
-		enrichRoot(root)
+		m.enrichRoot(root)
 		created = append(created, root)
 	}
 	return &rootsv1.SeedFromPathsResponse{Created: created, Existing: existing}, nil
 }
 
 func (m *Module) ProbeRoot(ctx context.Context, req *rootsv1.ProbeRootRequest) (*rootsv1.ProbeRootResponse, error) {
-	path, err := normalizePath(req.GetPath())
+	path, err := m.confineRootPath(req.GetPath())
 	if err != nil {
-		return nil, invalidArg("%v", err)
+		return nil, err
 	}
 	ok, free, total, errMsg := probePath(path)
 	return &rootsv1.ProbeRootResponse{
@@ -622,22 +686,35 @@ func (m *Module) ProbeRoot(ctx context.Context, req *rootsv1.ProbeRootRequest) (
 }
 
 func (m *Module) BrowsePath(ctx context.Context, req *rootsv1.BrowsePathRequest) (*rootsv1.BrowsePathResponse, error) {
+	roots, err := m.browseRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
 	raw := strings.TrimSpace(req.GetPath())
 	if raw == "" {
-		raw = "/"
+		if len(roots) != 1 {
+			// No path: list the browse roots themselves.
+			out := make([]*rootsv1.BrowseEntry, 0, len(roots))
+			for _, r := range roots {
+				out = append(out, &rootsv1.BrowseEntry{Name: r, Path: r, IsDir: true})
+			}
+			return &rootsv1.BrowsePathResponse{Entries: out}, nil
+		}
+		raw = roots[0]
 	}
 	path, err := normalizePath(raw)
 	if err != nil {
 		return nil, invalidArg("%v", err)
 	}
-	if !m.pathAllowedByBrowsePrefixes(path) {
-		return nil, invalidArg("path outside allowed browse prefixes")
+	realPath, err := pathguard.Confine(raw, roots)
+	if err != nil {
+		return nil, invalidArg("path outside allowed browse prefixes: %v", err)
 	}
-	if dirErr := requireAccessibleDir(path); dirErr != nil {
+	if dirErr := requireAccessibleDir(realPath); dirErr != nil {
 		return nil, invalidArg("%v", dirErr)
 	}
 
-	entries, err := os.ReadDir(path)
+	entries, err := os.ReadDir(realPath)
 	if err != nil {
 		return nil, internalErr(fmt.Errorf("read directory: %w", err))
 	}
@@ -645,27 +722,21 @@ func (m *Module) BrowsePath(ctx context.Context, req *rootsv1.BrowsePathRequest)
 	parent := filepath.Dir(path)
 	if parent == path {
 		parent = ""
+	} else if _, perr := pathguard.Confine(parent, roots); perr != nil {
+		// Do not offer navigation above the browse roots.
+		parent = ""
 	}
 
 	out := make([]*rootsv1.BrowseEntry, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		child := filepath.Join(path, e.Name())
-		cleaned := filepath.Clean(child)
-		if !pathUnderPrefix(cleaned, path) && path != string(filepath.Separator) {
-			continue
-		}
-		if !m.pathAllowedByBrowsePrefixes(cleaned) {
+		// DirEntry.IsDir is false for symlinks, so symlinked directories
+		// (which could point outside the roots) are never offered.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		out = append(out, &rootsv1.BrowseEntry{
 			Name:  e.Name(),
-			Path:  cleaned,
+			Path:  filepath.Join(path, e.Name()),
 			IsDir: true,
 		})
 	}
@@ -695,7 +766,7 @@ func (m *Module) PickRoot(ctx context.Context, req *rootsv1.PickRootRequest) (*r
 	var picked *rootsv1.RootFolder
 	var anyDefault *rootsv1.RootFolder
 	for _, r := range roots {
-		enrichRoot(r)
+		m.enrichRoot(r)
 		if !r.Accessible {
 			continue
 		}

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.12] - 2026-10-05
+
+
+### Security
+- New operator allow-list `ROOTS_ALLOWED_PREFIXES` (comma-separated absolute prefixes, sdk/go/module v0.6.6 `pathguard`): `CreateRoot`, `UpdateRoot` (path change), `SeedFromPaths` and `ProbeRoot` only accept paths that resolve inside it (symlinks resolved, `..` refused, `/data/movies2` is not inside `/data/movies`). Unset means fail-closed: these RPCs return `FailedPrecondition`, so `/`, `/etc` etc. can no longer become roots (NFR-SEC-008 / RULE-VAL-1).
+- `BrowsePath` no longer defaults to the whole filesystem: it is confined (symlink-aware) to `ROOTS_BROWSE_PREFIXES`, else `ROOTS_ALLOWED_PREFIXES`, else the registered roots, and refuses when none exist. An empty path starts at the single browse root or lists the roots; `parent` is never above a root and symlinked directories are not offered.
+- Registered roots that resolve outside `ROOTS_ALLOWED_PREFIXES` (legacy rows) are logged at start-up and reported `accessible=false`, so `PickRoot` never hands them out; they remain listed for deletion.
+
+### Changed
+- Deploy prerequisite: set `ROOTS_ALLOWED_PREFIXES` to the library mounts (run-host / compose / NixOS env) before upgrading, or root creation and probing are refused.
+
 ## [0.1.11] - 2026-10-05
 
 

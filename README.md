@@ -11,7 +11,8 @@ Requires MuxCore **v0.4.0+**. No external contracts — exposes its own gRPC API
 | `ROOTS_DB_PATH` | `/var/lib/media-root-folders/roots.db` | SQLite database path |
 | `ROOTS_GRPC_ADDR` | `:9540` | gRPC listen address |
 | `ROOTS_REQUIRE_ACCESSIBLE` | `true` | When true, reject Create/Update/Seed (unless `skip_validation`) when the path is missing or unreadable. Persisted when changed via SettingsProvider. |
-| `ROOTS_BROWSE_PREFIXES` | `/` | Comma-separated absolute path prefixes allowed for `BrowsePath`. Production should set this to library mount roots (e.g. `/mnt/media,/srv/library`) instead of the whole filesystem. |
+| `ROOTS_ALLOWED_PREFIXES` | _(unset: refuse)_ | Comma-separated absolute prefixes every root path must resolve inside (symlinks resolved). Unset: `CreateRoot`/`UpdateRoot` path changes/`SeedFromPaths`/`ProbeRoot` are refused (fail-closed). Set to the library mounts, e.g. `/mnt/media,/srv/library`. |
+| `ROOTS_BROWSE_PREFIXES` | _(unset)_ | Comma-separated absolute prefixes `BrowsePath` may list. Unset: falls back to `ROOTS_ALLOWED_PREFIXES`, then to the registered roots; never the whole filesystem. |
 | `MUXCORE_INSECURE_DISABLE_TLS` | `false` | Disable TLS for module↔core gRPC (`true` for local dev) |
 
 ## Capability
